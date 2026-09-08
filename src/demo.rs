@@ -2617,10 +2617,19 @@ mod tests {
                 _ => {}
             }
         }
-        let render = |app: &mut App, events: Vec<egui::Event>| {
+        let mut clock = 0.0;
+        let mut render = |app: &mut App, events: Vec<egui::Event>| {
             let mut text = Vec::new();
             let mut lines = Vec::new();
-            let mut output = ctx.run_ui(egui::RawInput { events, ..tall() }, |ui| app.frame_ui(ui));
+            clock += 1.0 / 60.0;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    events,
+                    time: Some(clock),
+                    ..tall()
+                },
+                |ui| app.frame_ui(ui),
+            );
             output.textures_delta.clear();
             for clipped in &output.shapes {
                 walk(&clipped.shape, &mut text, &mut lines);
@@ -2648,14 +2657,29 @@ mod tests {
                 .unwrap_or_else(|| panic!("the {label} row was never drawn"))
                 .1
         };
-        let like = row_y(TaskbarButton::Like.label());
-        let next = row_y(TaskbarButton::Next.label());
+        // Measure the pitch rather than assuming it, because the rows carry
+        // the interface's own spacing between them.
+        let rows: Vec<f32> = TaskbarButton::ALL
+            .iter()
+            .map(|button| row_y(button.label()))
+            .collect();
+        let pitch = rows[1] - rows[0];
+        assert!(pitch > 1.0, "the rows should be laid out apart: {rows:?}");
 
+        // Hold over the middle row and let the rows finish parting, which is
+        // the state a hand actually sees during a drag.
+        let middle = rows[2];
         egui::DragAndDrop::set_payload(&ctx, DragTaskbarButton(0));
-        let (_, held) = render(
-            &mut app,
-            vec![egui::Event::PointerMoved(egui::pos2(400.0, next))],
-        );
+        let mut held = Vec::new();
+        let mut settled = Vec::new();
+        for _ in 0..20 {
+            let (text, lines) = render(
+                &mut app,
+                vec![egui::Event::PointerMoved(egui::pos2(400.0, middle))],
+            );
+            held = lines;
+            settled = text;
+        }
         egui::DragAndDrop::clear_payload(&ctx);
 
         let marks = marker(&held);
@@ -2664,10 +2688,122 @@ mod tests {
             1,
             "exactly one drop marker should be drawn while a button is held, got {marks:?}"
         );
+        let mark = marks[0];
+        let parted: Vec<f32> = TaskbarButton::ALL
+            .iter()
+            .map(|button| {
+                settled
+                    .iter()
+                    .find(|(drawn, _)| drawn == button.label())
+                    .unwrap_or_else(|| panic!("the {} row vanished", button.label()))
+                    .1
+            })
+            .collect();
+        // A label is drawn from its own top downwards, so this is the band
+        // the glyphs occupy and the marker has to stay out of.
+        for (row, button) in parted.iter().zip(TaskbarButton::ALL) {
+            assert!(
+                mark < row - 2.0 || mark > row + 18.0,
+                "the marker at {mark} sits on the {} row's text at {row}, rows are {parted:?}",
+                button.label()
+            );
+        }
         assert!(
-            marks[0] > like && marks[0] <= next + 20.0,
-            "the marker should sit in the gap under the pointer, got {} between {like} and {next}",
-            marks[0]
+            mark > parted[0] && mark < parted[parted.len() - 1],
+            "the marker at {mark} should sit inside the list, rows are {parted:?}"
+        );
+
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// The marker is drawn in the interface's own accent, so switching the
+    /// theme recolours it along with everything else.
+    #[cfg(windows)]
+    #[test]
+    fn the_taskbar_drop_marker_follows_the_theme() {
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-taskbar-theme-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.settings.zoom = 1.0;
+        app.settings.accent_from_art = false;
+        app.open(Page::Settings);
+
+        fn strokes(shape: &egui::epaint::Shape, found: &mut Vec<(egui::Color32, f32)>) {
+            match shape {
+                egui::epaint::Shape::LineSegment { points, stroke } => {
+                    if (points[0].y - points[1].y).abs() < 0.5 {
+                        found.push((stroke.color, stroke.width));
+                    }
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().for_each(|shape| strokes(shape, found))
+                }
+                _ => {}
+            }
+        }
+
+        let mut accents = Vec::new();
+        let mut clock = 0.0;
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            ctx.set_theme(theme);
+            let mut found = Vec::new();
+            for frame in 0..20 {
+                clock += 1.0 / 60.0;
+                egui::DragAndDrop::set_payload(&ctx, DragTaskbarButton(0));
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1280.0, 4000.0),
+                        )),
+                        time: Some(clock),
+                        events: vec![egui::Event::PointerMoved(egui::pos2(400.0, 1550.0))],
+                        ..Default::default()
+                    },
+                    |ui| app.frame_ui(ui),
+                );
+                output.textures_delta.clear();
+                if frame == 19 {
+                    for clipped in &output.shapes {
+                        strokes(&clipped.shape, &mut found);
+                    }
+                }
+            }
+            egui::DragAndDrop::clear_payload(&ctx);
+            let accent = app.palette.accent;
+            assert!(
+                found
+                    .iter()
+                    .any(|(colour, width)| *colour == accent && (*width - 2.0).abs() < 0.1),
+                "the {theme:?} theme drew no marker in its accent {accent:?}, saw {found:?}"
+            );
+            accents.push(accent);
+        }
+        assert_ne!(
+            accents[0], accents[1],
+            "the two themes share an accent, so this proves nothing"
         );
 
         app.backend.shutdown();

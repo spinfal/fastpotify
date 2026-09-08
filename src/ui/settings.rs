@@ -92,6 +92,7 @@ fn taskbar_buttons(app: &mut App, ui: &mut egui::Ui, palette: &Palette) -> bool 
         .flatten()
         .map(|pos| (((pos.y - list_top) / row_height).round().max(0.0) as usize).min(shown.len()));
 
+    let mut drawn: Vec<egui::Rect> = Vec::with_capacity(shown.len());
     for (index, button) in shown.iter().copied().enumerate() {
         let (rect, response) = taskbar_button_row(ui, button, true, row_height);
         if response.drag_started_by(egui::PointerButton::Primary) {
@@ -100,13 +101,14 @@ fn taskbar_buttons(app: &mut App, ui: &mut egui::Ui, palette: &Palette) -> bool 
         let offset = ui.ctx().animate_value_with_time(
             ui.id().with(("taskbar-shift", index)),
             match slot {
-                Some(target) if index < target => -4.0,
-                Some(target) if index > target => 4.0,
+                Some(target) if index < target => -5.0,
+                Some(target) if index > target => 5.0,
                 _ => 0.0,
             },
             0.12,
         );
         let row = rect.translate(Vec2::new(0.0, offset));
+        drawn.push(row);
         let mut on = true;
         paint_taskbar_row(ui, palette, row, button, &mut on, response.hovered());
         if !on {
@@ -117,10 +119,21 @@ fn taskbar_buttons(app: &mut App, ui: &mut egui::Ui, palette: &Palette) -> bool 
         }
     }
 
-    if let Some(target) = slot {
+    if let Some(target) = slot
+        && let Some(first) = drawn.first()
+    {
+        let y = match (
+            target.checked_sub(1).and_then(|above| drawn.get(above)),
+            drawn.get(target),
+        ) {
+            (Some(above), Some(below)) => (above.bottom() + below.top()) / 2.0,
+            (None, Some(below)) => below.top() - 3.0,
+            (Some(above), None) => above.bottom() + 3.0,
+            (None, None) => first.top(),
+        };
         ui.painter().hline(
-            ui.max_rect().x_range().shrink(6.0),
-            list_top + target as f32 * row_height,
+            first.left() + 6.0..=first.right() - 58.0,
+            y,
             Stroke::new(2.0, palette.accent),
         );
     }
