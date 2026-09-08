@@ -2435,4 +2435,123 @@ mod tests {
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
     }
+
+    /// Dragging a taskbar button onto a later row rewrites the saved order,
+    /// so the thumbnail toolbar is built in the order the list shows.
+    #[cfg(windows)]
+    #[test]
+    fn dragging_a_taskbar_button_reorders_the_saved_list() {
+        use crate::settings::TaskbarButton;
+
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-taskbar-drag-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.settings.zoom = 1.0;
+        app.open(Page::Settings);
+
+        let tall = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 4000.0),
+            )),
+            ..Default::default()
+        };
+        let mut placed: Vec<(String, f32, f32)> = Vec::new();
+        for _ in 0..2 {
+            placed.clear();
+            let mut output = ctx.run_ui(tall(), |ui| app.frame_ui(ui));
+            output.textures_delta.clear();
+            fn walk(shape: &egui::epaint::Shape, placed: &mut Vec<(String, f32, f32)>) {
+                match shape {
+                    egui::epaint::Shape::Text(text) => {
+                        placed.push((text.galley.job.text.clone(), text.pos.x, text.pos.y))
+                    }
+                    egui::epaint::Shape::Vec(shapes) => {
+                        shapes.iter().for_each(|shape| walk(shape, placed))
+                    }
+                    _ => {}
+                }
+            }
+            for clipped in &output.shapes {
+                walk(&clipped.shape, &mut placed);
+            }
+        }
+        let row_top = |label: &str| -> f32 {
+            placed
+                .iter()
+                .find(|(text, _, _)| text == label)
+                .unwrap_or_else(|| panic!("the {label} row was never drawn: {placed:?}"))
+                .2
+        };
+        let like = row_top(TaskbarButton::Like.label());
+        let next = row_top(TaskbarButton::Next.label());
+        assert!(
+            next > like,
+            "the default order should draw Like above Next, got {like} and {next}"
+        );
+
+        let drop = egui::pos2(400.0, next);
+        egui::DragAndDrop::set_payload(&ctx, DragTaskbarButton(0));
+        let mut moved = egui::RawInput {
+            events: vec![egui::Event::PointerMoved(drop)],
+            ..tall()
+        };
+        ctx.run_ui(moved.clone(), |ui| app.frame_ui(ui))
+            .textures_delta
+            .clear();
+        moved.events = vec![egui::Event::PointerButton {
+            pos: drop,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: egui::Modifiers::NONE,
+        }];
+        ctx.run_ui(moved, |ui| app.frame_ui(ui))
+            .textures_delta
+            .clear();
+        egui::DragAndDrop::clear_payload(&ctx);
+
+        let order = app.settings.taskbar_slots();
+        assert_ne!(
+            order[0],
+            TaskbarButton::Like,
+            "Like should have left the first slot: {order:?}"
+        );
+        assert_eq!(
+            order.len(),
+            TaskbarButton::ALL.len(),
+            "reordering must not drop a button: {order:?}"
+        );
+        let position = order
+            .iter()
+            .position(|button| *button == TaskbarButton::Like)
+            .expect("Like left the list entirely");
+        assert!(
+            position >= 2,
+            "Like should have landed near the row it was dropped on, got slot {position}"
+        );
+
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

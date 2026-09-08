@@ -647,6 +647,10 @@ pub struct DragEntry {
     pub image: Option<String>,
 }
 
+#[cfg(windows)]
+#[derive(Clone, Debug)]
+pub struct DragTaskbarButton(pub usize);
+
 #[derive(Clone, Debug)]
 pub enum Dialog {
     CreatePlaylist {

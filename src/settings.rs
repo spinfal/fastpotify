@@ -46,6 +46,36 @@ impl ThemeChoice {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TaskbarButton {
+    Like,
+    Previous,
+    PlayPause,
+    Next,
+    RepeatOne,
+}
+
+impl TaskbarButton {
+    pub const ALL: [TaskbarButton; 5] = [
+        Self::Like,
+        Self::Previous,
+        Self::PlayPause,
+        Self::Next,
+        Self::RepeatOne,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Like => "Like",
+            Self::Previous => "Previous",
+            Self::PlayPause => "Play and pause",
+            Self::Next => "Next",
+            Self::RepeatOne => "Repeat one",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -94,6 +124,7 @@ pub struct Settings {
     pub playback_authorized: bool,
     /// Closing the window hides to the tray and keeps the music playing.
     pub keep_playing_in_background: bool,
+    pub taskbar_buttons: Vec<TaskbarButton>,
     /// Ask GitHub once a day whether a newer release exists.
     pub check_for_updates: bool,
     /// Context URIs pinned to the top of the sidebar, in pin order.
@@ -182,6 +213,7 @@ impl Default for Settings {
             personal_app_nudge_at: None,
             playback_authorized: false,
             keep_playing_in_background: true,
+            taskbar_buttons: TaskbarButton::ALL.to_vec(),
             check_for_updates: true,
             pinned_contexts: Vec::new(),
             sidebar_order: Vec::new(),
@@ -218,6 +250,16 @@ fn default_buffer_ms() -> u32 {
 }
 
 impl Settings {
+    pub fn taskbar_slots(&self) -> Vec<TaskbarButton> {
+        let mut slots: Vec<TaskbarButton> = Vec::with_capacity(TaskbarButton::ALL.len());
+        for button in &self.taskbar_buttons {
+            if !slots.contains(button) {
+                slots.push(*button);
+            }
+        }
+        slots
+    }
+
     pub fn load(path: &Path) -> Self {
         match std::fs::read_to_string(path) {
             Ok(text) => serde_json::from_str(&text).unwrap_or_else(|error| {
@@ -380,6 +422,57 @@ mod tests {
             restored.personal_app_nudge_at,
             settings.personal_app_nudge_at
         );
+    }
+
+    #[test]
+    fn older_settings_get_every_taskbar_button_in_order() {
+        use super::TaskbarButton;
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(
+            settings.taskbar_buttons,
+            vec![
+                TaskbarButton::Like,
+                TaskbarButton::Previous,
+                TaskbarButton::PlayPause,
+                TaskbarButton::Next,
+                TaskbarButton::RepeatOne,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_hand_edited_taskbar_list_keeps_each_button_once() {
+        use super::TaskbarButton;
+        let settings = Settings {
+            taskbar_buttons: vec![
+                TaskbarButton::Like,
+                TaskbarButton::Like,
+                TaskbarButton::Next,
+                TaskbarButton::PlayPause,
+                TaskbarButton::Next,
+            ],
+            ..Settings::default()
+        };
+        assert_eq!(
+            settings.taskbar_slots(),
+            vec![
+                TaskbarButton::Like,
+                TaskbarButton::Next,
+                TaskbarButton::PlayPause,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_customised_taskbar_order_round_trips() {
+        use super::TaskbarButton;
+        let settings = Settings {
+            taskbar_buttons: vec![TaskbarButton::PlayPause, TaskbarButton::Like],
+            ..Settings::default()
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let restored: Settings = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.taskbar_buttons, settings.taskbar_buttons);
     }
 }
 

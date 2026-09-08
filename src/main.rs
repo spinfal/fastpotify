@@ -432,6 +432,11 @@ fn main() -> eframe::Result<()> {
                     let ctx = cc.egui_ctx.clone();
                     fastpotify::mac_menu::set_waker(move || ctx.request_repaint());
                 }
+                #[cfg(windows)]
+                {
+                    let ctx = cc.egui_ctx.clone();
+                    fastpotify::taskbar::set_waker(move || ctx.request_repaint());
+                }
                 app.attach(&cc.egui_ctx);
                 Ok(Box::new(Shell {
                     app: Some(app),
@@ -866,6 +871,20 @@ impl eframe::App for Shell {
                 app.actions.push(action);
             }
             app.background_frame(ctx);
+            #[cfg(windows)]
+            {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                if let Ok(handle) = _frame.window_handle()
+                    && let RawWindowHandle::Win32(window) = handle.as_raw()
+                {
+                    fastpotify::taskbar::attach(
+                        ctx,
+                        window.hwnd.get(),
+                        &app.settings.taskbar_slots(),
+                        app.taskbar_state(),
+                    );
+                }
+            }
         }
         #[cfg(feature = "demo")]
         self.drive_shot(ctx);

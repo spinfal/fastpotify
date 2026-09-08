@@ -49,3 +49,8 @@ Storage shows its location and has a **Clear history** button.
 On Windows, the main window's minimize, maximize, and close buttons share the
 top bar with Fastpotify's controls. Drag an empty part of that bar to move or
 snap the window, and drag a window edge or corner to resize it.
+
+Resting the pointer on Fastpotify's taskbar button shows a preview with
+playback buttons under it: like, previous, play and pause, next, and repeat
+one. Settings → Appearance → **Taskbar buttons** turns each one on or off and
+reorders them by dragging. Like and repeat one need a song to be playing.

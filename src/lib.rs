@@ -37,6 +37,7 @@ pub mod single_instance;
 pub mod sink;
 pub mod skin;
 pub mod system_fonts;
+pub mod taskbar;
 pub mod theme;
 #[cfg(target_os = "linux")]
 pub mod tray;

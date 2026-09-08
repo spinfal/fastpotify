@@ -37,6 +37,170 @@ fn section(
     ui.add_space(8.0);
 }
 
+#[cfg(windows)]
+use crate::model::DragTaskbarButton;
+
+#[cfg(windows)]
+fn taskbar_button_row(
+    ui: &mut egui::Ui,
+    button: crate::settings::TaskbarButton,
+    on: bool,
+    row_height: f32,
+) -> (egui::Rect, egui::Response) {
+    let (_, rect) = ui.allocate_space(Vec2::new(ui.available_width(), row_height));
+    let response = ui.interact(
+        rect,
+        ui.id().with(("taskbar-row", button.label())),
+        egui::Sense::drag(),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::Checkbox,
+            ui.is_enabled(),
+            on,
+            button.label(),
+        )
+    });
+    (rect, response)
+}
+
+#[cfg(windows)]
+fn taskbar_buttons(app: &mut App, ui: &mut egui::Ui, palette: &Palette) -> bool {
+    use crate::settings::TaskbarButton;
+
+    let row_height = 34.0;
+    ui.add_space(14.0);
+    theme::text(ui, "Taskbar buttons", theme::medium(14.0), palette.text);
+    ui.add(
+        egui::Label::new(
+            egui::RichText::new(
+                "Shown under the taskbar preview when the pointer rests on Fastpotify. Drag to reorder.",
+            )
+            .font(theme::regular(12.5))
+            .color(palette.secondary),
+        )
+        .wrap(),
+    );
+    ui.add_space(8.0);
+
+    let mut changed = false;
+    let shown = app.settings.taskbar_slots();
+    let list_top = ui.cursor().top();
+    let dragging = egui::DragAndDrop::has_payload_of_type::<DragTaskbarButton>(ui.ctx());
+    let slot = dragging
+        .then(|| ui.ctx().pointer_interact_pos())
+        .flatten()
+        .map(|pos| (((pos.y - list_top) / row_height).round().max(0.0) as usize).min(shown.len()));
+
+    for (index, button) in shown.iter().copied().enumerate() {
+        let (rect, response) = taskbar_button_row(ui, button, true, row_height);
+        if response.drag_started_by(egui::PointerButton::Primary) {
+            egui::DragAndDrop::set_payload(ui.ctx(), DragTaskbarButton(index));
+        }
+        let offset = match slot {
+            Some(target) if index < target => -3.0,
+            Some(target) if index > target => 3.0,
+            _ => 0.0,
+        };
+        let row = rect.translate(Vec2::new(0.0, offset));
+        let mut on = true;
+        paint_taskbar_row(ui, palette, row, button, &mut on, response.hovered());
+        if !on {
+            let mut buttons = shown.clone();
+            buttons.retain(|held| *held != button);
+            app.settings.taskbar_buttons = buttons;
+            changed = true;
+        }
+    }
+
+    for button in TaskbarButton::ALL
+        .into_iter()
+        .filter(|button| !shown.contains(button))
+    {
+        let (rect, _) = taskbar_button_row(ui, button, false, row_height);
+        let mut on = false;
+        paint_taskbar_row(ui, palette, rect, button, &mut on, false);
+        if on {
+            let mut buttons = app.settings.taskbar_slots();
+            buttons.push(button);
+            app.settings.taskbar_buttons = buttons;
+            changed = true;
+        }
+    }
+
+    if let Some(target) = slot
+        && ui.input(|input| input.pointer.any_released())
+        && let Some(drag) = egui::DragAndDrop::take_payload::<DragTaskbarButton>(ui.ctx())
+    {
+        let mut buttons = shown.clone();
+        crate::taskbar::reorder(&mut buttons, drag.0, target);
+        if buttons != shown {
+            app.settings.taskbar_buttons = buttons;
+            changed = true;
+        }
+    }
+    changed
+}
+
+#[cfg(windows)]
+fn paint_taskbar_row(
+    ui: &mut egui::Ui,
+    palette: &Palette,
+    rect: egui::Rect,
+    button: crate::settings::TaskbarButton,
+    on: &mut bool,
+    hovered: bool,
+) {
+    use crate::settings::TaskbarButton;
+
+    if hovered {
+        ui.painter().rect_filled(
+            rect,
+            CornerRadius::same(theme::RADIUS),
+            palette
+                .surface
+                .gamma_multiply(if palette.dark { 1.4 } else { 0.96 }),
+        );
+    }
+    let text_colour = if *on { palette.text } else { palette.secondary };
+    let grip = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + 10.0, rect.center().y - 8.0),
+        Vec2::splat(16.0),
+    );
+    ui.put(
+        grip,
+        theme::Icon::GripVertical.image(palette.secondary, 16.0),
+    );
+    let glyph = match button {
+        TaskbarButton::Like => theme::Icon::Heart,
+        TaskbarButton::Previous => theme::Icon::SkipBackFilled,
+        TaskbarButton::PlayPause => theme::Icon::PlayFilled,
+        TaskbarButton::Next => theme::Icon::SkipForwardFilled,
+        TaskbarButton::RepeatOne => theme::Icon::Repeat1,
+    };
+    ui.put(
+        egui::Rect::from_min_size(
+            egui::pos2(rect.left() + 34.0, rect.center().y - 8.0),
+            Vec2::splat(16.0),
+        ),
+        glyph.image(text_colour, 16.0),
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 60.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        button.label(),
+        theme::regular(13.5),
+        text_colour,
+    );
+    let switch = egui::Rect::from_min_size(
+        egui::pos2(rect.right() - 50.0, rect.center().y - 11.0),
+        Vec2::new(40.0, 22.0),
+    );
+    ui.scope_builder(egui::UiBuilder::new().max_rect(switch), |ui| {
+        widgets::switch(ui, palette, button.label(), on);
+    });
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let palette = app.palette;
     ui.add_space(8.0);
@@ -576,6 +740,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 });
             },
         );
+        #[cfg(windows)]
+        if taskbar_buttons(app, ui, &palette) {
+            changed = true;
+        }
     });
 
     section(ui, &palette, "Winamp skins", |ui| {

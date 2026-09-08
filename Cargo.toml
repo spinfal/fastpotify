@@ -124,6 +124,14 @@ objc2-foundation = { version = "0.3", default-features = false, features = ["std
 [target.'cfg(windows)'.dependencies]
 # A hidden window for the media controls to belong to, and message loops.
 windows-sys = { version = "0.60", features = ["Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Gdi", "Win32_Storage_FileSystem", "Win32_System_Com", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# The taskbar's thumbnail toolbar is COM (ITaskbarList3), which windows-sys
+# does not carry. eframe's accesskit already builds this same version with
+# every feature below except Win32_UI_Shell, so that module is all this adds
+# to the build.
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# The main window's handle, to hang the thumbnail toolbar off. MilkDrop
+# already builds it, so this only makes it unconditional on Windows.
+raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ksni = { version = "0.3", features = ["blocking"] }

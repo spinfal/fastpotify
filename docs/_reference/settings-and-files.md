@@ -78,6 +78,7 @@ main fields are:
 | `accent_from_art` | `true` | Tint pages with album art |
 | `sidebar_compact` | `false` | Names only in the library sidebar, no covers |
 | `tracklist_compact` | `false` | One-line track rows without covers |
+| `taskbar_buttons` | all five | Windows taskbar preview buttons, in order: `like`, `previous`, `play-pause`, `next`, `repeat-one` |
 | `winamp_window` | `false` | The window is the Winamp mini player |
 | `skin` | none | File or folder name in the skins folder; blank uses the built-in skin |
 | `skin_scale` | by display | Screen pixels per skin pixel, 1 to 4 |

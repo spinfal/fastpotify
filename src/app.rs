@@ -21,6 +21,8 @@ use crate::model::QueueTab;
 use crate::model::*;
 use crate::paths::AppDirs;
 use crate::player::{EngineConfig, LoadSpec, LocalState, Playback, PlayerCommand, RepeatMode};
+#[cfg(any(windows, test))]
+use crate::settings::TaskbarButton;
 use crate::settings::{CachedRootlist, SessionState, Settings, ThemeChoice};
 use crate::single_instance::ControlCommand;
 use crate::theme::{self, Palette};
@@ -2206,6 +2208,44 @@ impl App {
                 TrayCommand::Next => self.actions.push(Action::Next),
                 TrayCommand::Previous => self.actions.push(Action::Previous),
                 TrayCommand::Quit => self.actions.push(Action::Quit),
+            }
+        }
+    }
+
+    #[cfg(any(windows, test))]
+    pub fn taskbar_state(&self) -> crate::taskbar::TaskbarState {
+        let fetched = self
+            .frame_now
+            .is_none()
+            .then(|| self.now_playing())
+            .flatten();
+        let now = self.frame_now.as_ref().or(fetched.as_ref());
+        crate::taskbar::TaskbarState {
+            playing: now.is_some_and(|now| now.playing),
+            saved: now.and_then(|now| self.is_saved(&now.uri)).unwrap_or(false),
+            repeat_one: now.is_some_and(|now| now.repeat == RepeatMode::Track),
+            has_track: now.is_some(),
+        }
+    }
+
+    #[cfg(any(windows, test))]
+    fn handle_taskbar(&mut self, commands: Vec<TaskbarButton>) {
+        for command in commands {
+            let action = match command {
+                TaskbarButton::Like => self.now_playing().map(|now| Action::ToggleSaved(now.uri)),
+                TaskbarButton::Previous => Some(Action::Previous),
+                TaskbarButton::PlayPause => Some(Action::TogglePlay),
+                TaskbarButton::Next => Some(Action::Next),
+                TaskbarButton::RepeatOne => self.now_playing().map(|now| {
+                    Action::SetRepeat(if now.repeat == RepeatMode::Track {
+                        RepeatMode::Off
+                    } else {
+                        RepeatMode::Track
+                    })
+                }),
+            };
+            if let Some(action) = action {
+                self.actions.push(action);
             }
         }
     }
@@ -6161,6 +6201,15 @@ impl App {
         self.open_pending_link();
         self.handle_media_commands();
         self.handle_tray();
+        #[cfg(windows)]
+        {
+            let slots = self.settings.taskbar_slots();
+            let clicked = crate::taskbar::drain_clicks()
+                .into_iter()
+                .filter_map(|slot| slots.get(slot).copied())
+                .collect();
+            self.handle_taskbar(clicked);
+        }
         self.tick(ctx);
         self.note_listening();
         // MilkDrop runs in a child process and can outlive the main window.
@@ -10025,6 +10074,133 @@ mod tests {
         assert_ne!(
             app.library.liked.revision, before,
             "the shorter list must invalidate the table's cached row order"
+        );
+    }
+
+    fn taskbar_now(uri: &str, playing: bool, repeat: RepeatMode) -> NowPlaying {
+        NowPlaying {
+            local: true,
+            device_name: None,
+            uri: uri.to_string(),
+            id: crate::util::uri_id(uri).map(str::to_string),
+            title: "Song".into(),
+            artists: Vec::new(),
+            subtitle: String::new(),
+            album_name: String::new(),
+            album_id: None,
+            show_id: None,
+            art_url: None,
+            art_small: None,
+            duration_ms: 180_000,
+            position_ms: 0,
+            playing,
+            loading: false,
+            shuffle: false,
+            repeat,
+            volume_percent: 70,
+            can_control: true,
+            is_episode: false,
+            resuming: false,
+        }
+    }
+
+    #[test]
+    fn the_taskbar_state_follows_what_is_playing() {
+        use crate::taskbar::TaskbarState;
+        let mut app = headless_app();
+
+        assert_eq!(
+            app.taskbar_state(),
+            TaskbarState {
+                playing: false,
+                saved: false,
+                repeat_one: false,
+                has_track: false,
+            }
+        );
+
+        app.frame_now = Some(taskbar_now("spotify:track:a", true, RepeatMode::Track));
+
+        assert_eq!(
+            app.taskbar_state(),
+            TaskbarState {
+                playing: true,
+                saved: false,
+                repeat_one: true,
+                has_track: true,
+            }
+        );
+
+        app.saved.insert("spotify:track:a".into(), true);
+
+        assert_eq!(
+            app.taskbar_state(),
+            TaskbarState {
+                playing: true,
+                saved: true,
+                repeat_one: true,
+                has_track: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_taskbar_button_becomes_the_action_it_names() {
+        let mut app = headless_app();
+        app.frame_now = Some(taskbar_now("spotify:track:a", true, RepeatMode::Off));
+
+        app.handle_taskbar(vec![
+            TaskbarButton::Previous,
+            TaskbarButton::PlayPause,
+            TaskbarButton::Next,
+            TaskbarButton::Like,
+            TaskbarButton::RepeatOne,
+        ]);
+
+        assert!(
+            matches!(
+                app.actions.as_slice(),
+                [
+                    Action::Previous,
+                    Action::TogglePlay,
+                    Action::Next,
+                    Action::ToggleSaved(uri),
+                    Action::SetRepeat(RepeatMode::Track),
+                ] if uri == "spotify:track:a"
+            ),
+            "{:?}",
+            app.actions
+        );
+    }
+
+    #[test]
+    fn the_taskbar_repeat_button_turns_repeating_off_again() {
+        let mut app = headless_app();
+        app.frame_now = Some(taskbar_now("spotify:track:a", true, RepeatMode::Track));
+
+        app.handle_taskbar(vec![TaskbarButton::RepeatOne]);
+
+        assert!(
+            matches!(app.actions.as_slice(), [Action::SetRepeat(RepeatMode::Off)]),
+            "{:?}",
+            app.actions
+        );
+    }
+
+    #[test]
+    fn taskbar_buttons_that_need_a_track_fall_away_without_one() {
+        let mut app = headless_app();
+
+        app.handle_taskbar(vec![
+            TaskbarButton::Like,
+            TaskbarButton::RepeatOne,
+            TaskbarButton::Next,
+        ]);
+
+        assert!(
+            matches!(app.actions.as_slice(), [Action::Next]),
+            "{:?}",
+            app.actions
         );
     }
 }
