@@ -2554,4 +2554,123 @@ mod tests {
         app.backend.shutdown();
         let _ = std::fs::remove_dir_all(root);
     }
+
+    /// While a taskbar button is held, a line marks the gap it will drop
+    /// into, so the pointer is not the only clue about where it lands.
+    #[cfg(windows)]
+    #[test]
+    fn a_held_taskbar_button_marks_the_gap_it_will_drop_into() {
+        use crate::settings::TaskbarButton;
+
+        let root = std::env::temp_dir().join(format!(
+            "fastpotify-taskbar-marker-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let dirs = AppDirs {
+            config: root.join("config"),
+            state: root.join("state"),
+            cache: root.join("cache"),
+        };
+        let ctx = egui::Context::default();
+        let waker = crate::backend::Waker::default();
+        waker.attach(&ctx);
+        let mut app = App::new(
+            &waker,
+            dirs,
+            Settings::default(),
+            AppOptions {
+                media_controls: false,
+                tray: false,
+            },
+        );
+        app.attach(&ctx);
+        populate(&mut app);
+        app.settings.zoom = 1.0;
+        app.open(Page::Settings);
+
+        let accent = app.palette.accent;
+        let tall = || egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 4000.0),
+            )),
+            ..Default::default()
+        };
+        fn walk(
+            shape: &egui::epaint::Shape,
+            text: &mut Vec<(String, f32)>,
+            lines: &mut Vec<(f32, egui::Color32, f32)>,
+        ) {
+            match shape {
+                egui::epaint::Shape::Text(drawn) => {
+                    text.push((drawn.galley.job.text.clone(), drawn.pos.y))
+                }
+                egui::epaint::Shape::LineSegment { points, stroke } => {
+                    if (points[0].y - points[1].y).abs() < 0.5 {
+                        lines.push((points[0].y, stroke.color, stroke.width));
+                    }
+                }
+                egui::epaint::Shape::Vec(shapes) => {
+                    shapes.iter().for_each(|shape| walk(shape, text, lines))
+                }
+                _ => {}
+            }
+        }
+        let render = |app: &mut App, events: Vec<egui::Event>| {
+            let mut text = Vec::new();
+            let mut lines = Vec::new();
+            let mut output = ctx.run_ui(egui::RawInput { events, ..tall() }, |ui| app.frame_ui(ui));
+            output.textures_delta.clear();
+            for clipped in &output.shapes {
+                walk(&clipped.shape, &mut text, &mut lines);
+            }
+            (text, lines)
+        };
+
+        let marker = |lines: &[(f32, egui::Color32, f32)]| -> Vec<f32> {
+            lines
+                .iter()
+                .filter(|(_, colour, width)| *colour == accent && (*width - 2.0).abs() < 0.1)
+                .map(|(y, _, _)| *y)
+                .collect()
+        };
+
+        let (text, lines) = render(&mut app, Vec::new());
+        assert!(
+            marker(&lines).is_empty(),
+            "no drop marker should be drawn while nothing is held: {:?}",
+            marker(&lines)
+        );
+        let row_y = |label: &str| -> f32 {
+            text.iter()
+                .find(|(drawn, _)| drawn == label)
+                .unwrap_or_else(|| panic!("the {label} row was never drawn"))
+                .1
+        };
+        let like = row_y(TaskbarButton::Like.label());
+        let next = row_y(TaskbarButton::Next.label());
+
+        egui::DragAndDrop::set_payload(&ctx, DragTaskbarButton(0));
+        let (_, held) = render(
+            &mut app,
+            vec![egui::Event::PointerMoved(egui::pos2(400.0, next))],
+        );
+        egui::DragAndDrop::clear_payload(&ctx);
+
+        let marks = marker(&held);
+        assert_eq!(
+            marks.len(),
+            1,
+            "exactly one drop marker should be drawn while a button is held, got {marks:?}"
+        );
+        assert!(
+            marks[0] > like && marks[0] <= next + 20.0,
+            "the marker should sit in the gap under the pointer, got {} between {like} and {next}",
+            marks[0]
+        );
+
+        app.backend.shutdown();
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

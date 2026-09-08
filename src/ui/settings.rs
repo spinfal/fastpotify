@@ -97,11 +97,15 @@ fn taskbar_buttons(app: &mut App, ui: &mut egui::Ui, palette: &Palette) -> bool 
         if response.drag_started_by(egui::PointerButton::Primary) {
             egui::DragAndDrop::set_payload(ui.ctx(), DragTaskbarButton(index));
         }
-        let offset = match slot {
-            Some(target) if index < target => -3.0,
-            Some(target) if index > target => 3.0,
-            _ => 0.0,
-        };
+        let offset = ui.ctx().animate_value_with_time(
+            ui.id().with(("taskbar-shift", index)),
+            match slot {
+                Some(target) if index < target => -4.0,
+                Some(target) if index > target => 4.0,
+                _ => 0.0,
+            },
+            0.12,
+        );
         let row = rect.translate(Vec2::new(0.0, offset));
         let mut on = true;
         paint_taskbar_row(ui, palette, row, button, &mut on, response.hovered());
@@ -111,6 +115,14 @@ fn taskbar_buttons(app: &mut App, ui: &mut egui::Ui, palette: &Palette) -> bool 
             app.settings.taskbar_buttons = buttons;
             changed = true;
         }
+    }
+
+    if let Some(target) = slot {
+        ui.painter().hline(
+            ui.max_rect().x_range().shrink(6.0),
+            list_top + target as f32 * row_height,
+            Stroke::new(2.0, palette.accent),
+        );
     }
 
     for button in TaskbarButton::ALL
